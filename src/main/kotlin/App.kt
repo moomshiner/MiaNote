@@ -88,9 +88,10 @@ fun main() = application {
 
         // Zoom state + pan (wheel listener keeps cursor stable)
         var zoom by remember { mutableStateOf(1f) }
-        var pan by remember { mutableStateOf(Offset.Zero) }
         val minZoom = 0.2f
         val maxZoom = 8f
+        var pan by remember { mutableStateOf(Offset.Zero) }
+        var spacePressed by remember { mutableStateOf(false) }
         DisposableEffect(Unit) {
             val frame = window as JFrame
             // Use the actual display bounds we’re on
@@ -142,41 +143,30 @@ fun main() = application {
                 .focusRequester(focusRequester)
                 .focusTarget()
                 .onPreviewKeyEvent { ev ->
-                    if (ev.type == KeyEventType.KeyDown) {
-                        when {
-                            !isDrawing && ev.isCtrlPressed && ev.key == Key.Z -> {
-                                undo.pop()?.let { prev -> strokes = prev }
-                                true
-                            }
-                            ev.key == Key.LeftBracket -> {
-                                if (tool == Tool.PENCIL) {
-                                    pencilWidthPx = max(pencilWidthPx - 1f, 1f)
-                                } else {
-                                    eraserWidthPx = max(eraserWidthPx - 1f, 1f)
-                                }
-                                true
-                            }
-                            ev.key == Key.RightBracket -> {
-                                if (tool == Tool.PENCIL) {
-                                    pencilWidthPx = min(pencilWidthPx + 1f, 10f)
-                                } else {
-                                    eraserWidthPx = min(eraserWidthPx + 1f, 10f)
-                                }
-                                true
-                            }
-                            !isDrawing && ev.key == Key.E -> {
-                                tool = Tool.ERASER
-                                true
-                            }
-                            !isDrawing && ev.key == Key.B -> {
-                                tool = Tool.PENCIL
-                                true
-                            }
-                            else -> false
+                    when {
+                        ev.key == Key.Spacebar && ev.type == KeyEventType.KeyDown -> {
+                            spacePressed = true
+                            true
                         }
-                    } else false
+
+                        ev.key == Key.Spacebar && ev.type == KeyEventType.KeyUp -> {
+                            spacePressed = false
+                            true
+                        }
+
+                        !isDrawing &&
+                                ev.type == KeyEventType.KeyDown &&
+                                ev.isCtrlPressed &&
+                                ev.key == Key.Z -> {
+                            undo.pop()?.let { prev -> strokes = prev }
+                            true
+                        }
+
+                        else -> false
+                    }
                 }
         ) {
+            // Zoomable canvas area (centered, with gray outside)
             // Zoomable canvas area (centered, with gray outside)
             DrawingSurface(
                 modifier = Modifier
@@ -188,6 +178,7 @@ fun main() = application {
                 canvasHeightPx = canvasHeightPx,
                 zoom = zoom,
                 pan = pan,
+                spacePressed = spacePressed,
                 tool = tool,
                 pencilColor = pencilColor,
                 pencilWidthPx = pencilWidthPx,
@@ -202,10 +193,7 @@ fun main() = application {
                     isDrawing = false
                 },
                 onCancelStroke = { isDrawing = false },
-                onViewportChange = {
-                    viewportWidthPx = it.width.toFloat()
-                    viewportHeightPx = it.height.toFloat()
-                }
+                onPan = { pan = it }
             )
 
             // Exit (top-left)

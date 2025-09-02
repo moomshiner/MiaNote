@@ -15,6 +15,8 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -25,7 +27,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import java.awt.Point
 import java.awt.Toolkit
-import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 import kotlin.math.abs
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -38,6 +40,7 @@ fun DrawingSurface(
     canvasHeightPx: Float,
     zoom: Float,
     pan: Offset,
+    spacePressed: Boolean,
     tool: Tool,
     pencilColor: Color,
     pencilWidthPx: Float,
@@ -46,12 +49,15 @@ fun DrawingSurface(
     onBeginStroke: (List<StrokePath>) -> Unit,
     onCommitStroke: (List<StrokePath>) -> Unit,
     onCancelStroke: () -> Unit,
-    onViewportChange: (IntSize) -> Unit
+    onPan: (Offset) -> Unit
 ) {
     var current by remember { mutableStateOf<StrokePath?>(null) }
     var hoverPosCanvas by remember { mutableStateOf<Offset?>(null) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var lastScreenPos by remember { mutableStateOf<Offset?>(null) }
+    var insideCanvas by remember { mutableStateOf(false) }
+    var leftPressed by remember { mutableStateOf(false) }
+    var middlePressed by remember { mutableStateOf(false) }
 
     // Keep latest values without restarting pointerInput when they change
     val strokesState by rememberUpdatedState(strokes)
@@ -67,13 +73,16 @@ fun DrawingSurface(
         if (tool == Tool.ERASER) Color(0xFF444444).copy(alpha = 0.9f)
         else Color(0xFF111111).copy(alpha = 0.9f)
 
-    // Pointer icons: default vs invisible (only inside canvas)
-    val invisiblePointerIcon = remember {
-        val img = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB) // fully transparent
-        val awtCursor = Toolkit.getDefaultToolkit().createCustomCursor(img, Point(0, 0), "invisible")
-        PointerIcon(awtCursor)
+    fun loadCursor(res: String): PointerIcon {
+        val url = object {}.javaClass.getResource("/$res")
+        val img = ImageIO.read(url)
+        val awtCursor = Toolkit.getDefaultToolkit().createCustomCursor(img, Point(0, 0), res)
+        return PointerIcon(awtCursor)
     }
-    var pointerIcon by remember { mutableStateOf(PointerIcon.Default) }
+    val penCursor = remember { loadCursor("pencil.png") }
+    val handOpenCursor = remember { loadCursor("handopen.png") }
+    val handGrabCursor = remember { loadCursor("handgrab.png") }
+    var pointerIcon by remember { mutableStateOf(penCursor) }
 
     fun topLeftInScreen(z: Float = zoom): Offset {
         val vw = viewport.width.toFloat()
@@ -98,18 +107,24 @@ fun DrawingSurface(
         lastScreenPos?.let { sp ->
             val cp = screenToCanvas(sp, zoom)
             val inside = isInsideCanvas(cp)
-            hoverPosCanvas = if (inside) cp else null
-            pointerIcon = if (inside) invisiblePointerIcon else PointerIcon.Default
+            insideCanvas = inside
+            hoverPosCanvas = if (inside && !spacePressed && !middlePressed) cp else null
+        }
+    }
+
+    LaunchedEffect(spacePressed, leftPressed, middlePressed, insideCanvas) {
+        pointerIcon = when {
+            !insideCanvas -> PointerIcon.Default
+            spacePressed && leftPressed -> handGrabCursor
+            spacePressed || middlePressed -> handOpenCursor
+            else -> penCursor
         }
     }
 
     Box(
         modifier
             .background(outsideColor)
-            .onSizeChanged {
-                viewport = it
-                onViewportChange(it)
-            }
+            .onSizeChanged { viewport = it }
             // Cursor icon depends on whether pointer is within canvas bounds
             .pointerHoverIcon(pointerIcon, overrideDescendants = true)
 
@@ -118,19 +133,39 @@ fun DrawingSurface(
                 val p = e.changes.firstOrNull()?.position ?: return@onPointerEvent
                 lastScreenPos = p
                 val cp = screenToCanvas(p)
-                val inside = isInsideCanvas(cp)
-                hoverPosCanvas = if (inside) cp else null
-                pointerIcon = if (inside) invisiblePointerIcon else PointerIcon.Default
+                insideCanvas = isInsideCanvas(cp)
+                hoverPosCanvas = if (insideCanvas && !spacePressed && !middlePressed) cp else null
+            }
+            .onPointerEvent(PointerEventType.Press) { e ->
+                leftPressed = e.buttons.isPrimaryPressed
+                middlePressed = e.buttons.isTertiaryPressed
+                val p = e.changes.firstOrNull()?.position ?: return@onPointerEvent
+                lastScreenPos = p
+                val cp = screenToCanvas(p)
+                insideCanvas = isInsideCanvas(cp)
+                hoverPosCanvas = if (insideCanvas && !spacePressed && !middlePressed) cp else null
+            }
+            .onPointerEvent(PointerEventType.Release) { e ->
+                leftPressed = e.buttons.isPrimaryPressed
+                middlePressed = e.buttons.isTertiaryPressed
+                val p = e.changes.firstOrNull()?.position
+                if (p != null) {
+                    lastScreenPos = p
+                    val cp = screenToCanvas(p)
+                    insideCanvas = isInsideCanvas(cp)
+                    hoverPosCanvas = if (insideCanvas && !spacePressed && !middlePressed) cp else null
+                }
             }
             .onPointerEvent(PointerEventType.Exit) {
                 hoverPosCanvas = null
                 lastScreenPos = null
-                pointerIcon = PointerIcon.Default
+                insideCanvas = false
             }
 
-            // TAP-TO-DOT
-            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, pan, canvasWidthPx, canvasHeightPx) {                detectTapGestures(
+            // TAP-TO-DOT (disabled while panning)
+            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, pan, spacePressed, middlePressed) {              detectTapGestures(
                     onTap = { p ->
+                        if (spacePressed || middlePressed) return@detectTapGestures
                         lastScreenPos = p
                         val cp = screenToCanvas(p)
                         if (!isInsideCanvas(cp)) return@detectTapGestures
@@ -138,49 +173,58 @@ fun DrawingSurface(
                         val dot = StrokePath(points = listOf(cp), color = toolColor(), widthPx = toolWidth())
                         commitStroke(strokesState + dot)
                         hoverPosCanvas = cp
-                        pointerIcon = invisiblePointerIcon
                         current = null
                     }
                 )
             }
 
-            // DRAG STROKES (start must be inside; points are not clamped; we clip when rendering)
-            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, viewport, zoom, canvasWidthPx, canvasHeightPx) {
+            // DRAG STROKES or PAN (start must be inside for drawing)
+            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, pan, spacePressed, middlePressed) {
                 var startedInside = false
+                var panOffset = Offset.Zero
                 detectDragGestures(
                     onDragStart = { start ->
                         lastScreenPos = start
                         val cp = screenToCanvas(start)
-                        startedInside = isInsideCanvas(cp)
-                        if (startedInside) {
-                            beginStroke(strokesState)
-                            current = StrokePath(points = listOf(cp), color = toolColor(), widthPx = toolWidth())
-                            hoverPosCanvas = cp
-                            pointerIcon = invisiblePointerIcon
+                        val panMode = spacePressed || middlePressed
+                        panOffset = pan
+                        if (panMode) {
+                            hoverPosCanvas = null
+                        } else {
+                            startedInside = isInsideCanvas(cp)
+                            if (startedInside) {
+                                onBeginStroke(strokes)
+                                current = StrokePath(points = listOf(cp), color = toolColor(), widthPx = toolWidth())
+                                hoverPosCanvas = cp
+                            }
                         }
                     },
-                    onDrag = { change, _ ->
-                        if (!startedInside) return@detectDragGestures
+                    onDrag = { change, dragAmount ->
                         lastScreenPos = change.position
-                        val cp = screenToCanvas(change.position)
-                        current = current?.copy(points = current!!.points + cp)
-                        val inside = isInsideCanvas(cp)
-                        hoverPosCanvas = if (inside) cp else null
-                        pointerIcon = if (inside) invisiblePointerIcon else PointerIcon.Default
+                        if (spacePressed || middlePressed) {
+                            panOffset += dragAmount
+                            onPan(panOffset)
+                        } else if (startedInside) {
+                            val cp = screenToCanvas(change.position)
+                            current = current?.copy(points = current!!.points + cp)
+                            val inside = isInsideCanvas(cp)
+                            hoverPosCanvas = if (inside) cp else null
+                        }
                     },
                     onDragEnd = {
-                        if (startedInside) {
-                            current?.let { stroke -> commitStroke(strokesState + stroke) } ?: cancelStroke()
-                        } else cancelStroke()
+                        if (spacePressed || middlePressed) {
+                            // panning end
+                        } else {
+                            if (startedInside) {
+                                current?.let { stroke -> onCommitStroke(strokes + stroke) } ?: onCancelStroke()
+                            } else onCancelStroke()
+                        }
                         current = null
                         startedInside = false
-                        // cursor icon will be updated by the next Move event
                     },
                     onDragCancel = {
                         current = null
                         startedInside = false
-                        cancelStroke()
-                        pointerIcon = PointerIcon.Default
                     }
                 )
             }
