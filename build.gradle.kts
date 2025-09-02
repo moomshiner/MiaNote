@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.compile.JavaCompile
+
 plugins {
     kotlin("jvm") version "2.0.0"
     // ⬇️ REQUIRED with Kotlin 2.x to use Compose
@@ -20,7 +22,20 @@ tasks.test {
 }
 
 kotlin {
+    // Use the JDK 21 toolchain but generate Java 17 bytecode for wider compatibility
     jvmToolchain(21)
+}
+
+// Ensure Kotlin compiles to Java 17 bytecode so the application can run on JDK 17
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    // Compile any Java sources to Java 17 bytecode to align with Kotlin output
+    options.release.set(17)
 }
 
 compose.desktop {
