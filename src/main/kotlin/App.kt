@@ -82,10 +82,6 @@ fun main() = application {
         var canvasWidthPx by remember { mutableStateOf(1920f) }
         var canvasHeightPx by remember { mutableStateOf(1080f) }
 
-        // Viewport size (updated by DrawingSurface)
-        var viewportWidthPx by remember { mutableStateOf(0f) }
-        var viewportHeightPx by remember { mutableStateOf(0f) }
-
         // Zoom state + pan (wheel listener keeps cursor stable)
         var zoom by remember { mutableStateOf(1f) }
         val minZoom = 0.2f
@@ -100,7 +96,9 @@ fun main() = application {
             canvasHeightPx = b.height.toFloat()
 
             val wheel = MouseWheelListener { e ->
-                if (viewportWidthPx == 0f || viewportHeightPx == 0f) return@MouseWheelListener
+                val viewportWidth = frame.width.toFloat()
+                val viewportHeight = frame.height.toFloat()
+                if (viewportWidth == 0f || viewportHeight == 0f) return@MouseWheelListener
                 val cursor = Offset(e.x.toFloat(), e.y.toFloat())
                 val step = 1.1f
                 val newZoom = if (e.preciseWheelRotation < 0) {
@@ -110,8 +108,8 @@ fun main() = application {
                 }
                 if (newZoom != zoom) {
                     // Current centered position of the canvas in screen coordinates
-                    val centerX = (viewportWidthPx - canvasWidthPx * zoom) / 2f
-                    val centerY = (viewportHeightPx - canvasHeightPx * zoom) / 2f
+                    val centerX = (viewportWidth - canvasWidthPx * zoom) / 2f
+                    val centerY = (viewportHeight - canvasHeightPx * zoom) / 2f
                     val topLeftX = centerX + pan.x
                     val topLeftY = centerY + pan.y
                     // Convert cursor from screen space to canvas space
@@ -119,8 +117,8 @@ fun main() = application {
                     val canvasY = (cursor.y - topLeftY) / zoom
 
                     // Recompute center and top-left after zoom change
-                    val centerNewX = (viewportWidthPx - canvasWidthPx * newZoom) / 2f
-                    val centerNewY = (viewportHeightPx - canvasHeightPx * newZoom) / 2f
+                    val centerNewX = (viewportWidth - canvasWidthPx * newZoom) / 2f
+                    val centerNewY = (viewportHeight - canvasHeightPx * newZoom) / 2f
                     val topLeftNewX = cursor.x - canvasX * newZoom
                     val topLeftNewY = cursor.y - canvasY * newZoom
 
@@ -153,7 +151,32 @@ fun main() = application {
                             spacePressed = false
                             true
                         }
+                        ev.type == KeyEventType.KeyDown && ev.key == Key.LeftBracket -> {
+                            if (tool == Tool.PENCIL) {
+                                pencilWidthPx = max(pencilWidthPx - 1f, 1f)
+                            } else {
+                                eraserWidthPx = max(eraserWidthPx - 1f, 1f)
+                            }
+                            true
+                        }
+                        ev.type == KeyEventType.KeyDown && ev.key == Key.RightBracket -> {
+                            if (tool == Tool.PENCIL) {
+                                pencilWidthPx = min(pencilWidthPx + 1f, 10f)
+                            } else {
+                                eraserWidthPx = min(eraserWidthPx + 1f, 10f)
+                            }
+                            true
+                        }
 
+                        ev.type == KeyEventType.KeyDown && ev.key == Key.B -> {
+                            tool = Tool.PENCIL
+                            true
+                        }
+
+                        ev.type == KeyEventType.KeyDown && ev.key == Key.E -> {
+                            tool = Tool.ERASER
+                            true
+                        }
                         !isDrawing &&
                                 ev.type == KeyEventType.KeyDown &&
                                 ev.isCtrlPressed &&

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import java.awt.Point
 import java.awt.Toolkit
+import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 import kotlin.math.abs
 
@@ -64,6 +65,8 @@ fun DrawingSurface(
     val beginStroke by rememberUpdatedState(onBeginStroke)
     val commitStroke by rememberUpdatedState(onCommitStroke)
     val cancelStroke by rememberUpdatedState(onCancelStroke)
+    val panState by rememberUpdatedState(pan)
+    val middlePressedState by rememberUpdatedState(middlePressed)
 
     fun toolColor() = if (tool == Tool.ERASER) canvasColor else pencilColor
     fun toolWidth() = if (tool == Tool.ERASER) eraserWidthPx else pencilWidthPx
@@ -79,17 +82,20 @@ fun DrawingSurface(
         val awtCursor = Toolkit.getDefaultToolkit().createCustomCursor(img, Point(0, 0), res)
         return PointerIcon(awtCursor)
     }
-    val penCursor = remember { loadCursor("pencil.png") }
     val handOpenCursor = remember { loadCursor("handopen.png") }
     val handGrabCursor = remember { loadCursor("handgrab.png") }
-    var pointerIcon by remember { mutableStateOf(penCursor) }
+    val blankCursor = remember {
+        val img = BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
+        PointerIcon(Toolkit.getDefaultToolkit().createCustomCursor(img, Point(0, 0), "blank"))
+    }
+    var pointerIcon by remember { mutableStateOf<PointerIcon?>(null) }
 
     fun topLeftInScreen(z: Float = zoom): Offset {
         val vw = viewport.width.toFloat()
         val vh = viewport.height.toFloat()
         val sw = canvasWidthPx * z
         val sh = canvasHeightPx * z
-        return Offset((vw - sw) / 2f + pan.x, (vh - sh) / 2f + pan.y)
+        return Offset((vw - sw) / 2f + panState.x, (vh - sh) / 2f + panState.y)
     }
     fun screenToCanvas(p: Offset, z: Float = zoom): Offset {
         val tl = topLeftInScreen(z)
@@ -114,19 +120,21 @@ fun DrawingSurface(
 
     LaunchedEffect(spacePressed, leftPressed, middlePressed, insideCanvas) {
         pointerIcon = when {
-            !insideCanvas -> PointerIcon.Default
+            !insideCanvas -> null
             spacePressed && leftPressed -> handGrabCursor
             spacePressed || middlePressed -> handOpenCursor
-            else -> penCursor
+            else -> blankCursor
         }
     }
+
+    val cursorModifier = pointerIcon?.let { Modifier.pointerHoverIcon(it, overrideDescendants = true) } ?: Modifier
 
     Box(
         modifier
             .background(outsideColor)
             .onSizeChanged { viewport = it }
             // Cursor icon depends on whether pointer is within canvas bounds
-            .pointerHoverIcon(pointerIcon, overrideDescendants = true)
+            .then(cursorModifier)
 
             // Track pointer (store screen pos, and canvas pos only when inside)
             .onPointerEvent(PointerEventType.Move) { e ->
@@ -163,8 +171,7 @@ fun DrawingSurface(
             }
 
             // TAP-TO-DOT (disabled while panning)
-            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, pan, spacePressed, middlePressed) {              detectTapGestures(
-                    onTap = { p ->
+            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, spacePressed, middlePressed) {              detectTapGestures(                    onTap = { p ->
                         if (spacePressed || middlePressed) return@detectTapGestures
                         lastScreenPos = p
                         val cp = screenToCanvas(p)
@@ -179,16 +186,17 @@ fun DrawingSurface(
             }
 
             // DRAG STROKES or PAN (start must be inside for drawing)
-            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, pan, spacePressed, middlePressed) {
+            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx, spacePressed, middlePressed) {
                 var startedInside = false
                 var panOffset = Offset.Zero
+                var panning = false
                 detectDragGestures(
                     onDragStart = { start ->
                         lastScreenPos = start
                         val cp = screenToCanvas(start)
-                        val panMode = spacePressed || middlePressed
-                        panOffset = pan
-                        if (panMode) {
+                        panning = spacePressed || middlePressedState
+                        panOffset = panState
+                        if (panning) {
                             hoverPosCanvas = null
                         } else {
                             startedInside = isInsideCanvas(cp)
@@ -201,7 +209,7 @@ fun DrawingSurface(
                     },
                     onDrag = { change, dragAmount ->
                         lastScreenPos = change.position
-                        if (spacePressed || middlePressed) {
+                        if (panning) {
                             panOffset += dragAmount
                             onPan(panOffset)
                         } else if (startedInside) {
@@ -212,19 +220,19 @@ fun DrawingSurface(
                         }
                     },
                     onDragEnd = {
-                        if (spacePressed || middlePressed) {
-                            // panning end
-                        } else {
+                        if (!panning) {
                             if (startedInside) {
                                 current?.let { stroke -> onCommitStroke(strokes + stroke) } ?: onCancelStroke()
                             } else onCancelStroke()
                         }
                         current = null
                         startedInside = false
+                        panning = false
                     },
                     onDragCancel = {
                         current = null
                         startedInside = false
+                        panning = false
                     }
                 )
             }
