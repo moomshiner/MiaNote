@@ -1,5 +1,9 @@
 import org.gradle.api.tasks.compile.JavaCompile
 
+val requiredJava = JavaVersion.VERSION_17
+require(JavaVersion.current().isCompatibleWith(requiredJava)) {
+    "JDK 17 or newer is required (current: ${JavaVersion.current()})"
+}
 plugins {
     kotlin("jvm") version "2.0.0"
     // ⬇️ REQUIRED with Kotlin 2.x to use Compose

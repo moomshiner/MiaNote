@@ -37,6 +37,7 @@ fun DrawingSurface(
     canvasWidthPx: Float,
     canvasHeightPx: Float,
     zoom: Float,
+    pan: Offset,
     tool: Tool,
     pencilColor: Color,
     pencilWidthPx: Float,
@@ -44,12 +45,19 @@ fun DrawingSurface(
     strokes: List<StrokePath>,
     onBeginStroke: (List<StrokePath>) -> Unit,
     onCommitStroke: (List<StrokePath>) -> Unit,
-    onCancelStroke: () -> Unit
+    onCancelStroke: () -> Unit,
+    onViewportChange: (IntSize) -> Unit
 ) {
     var current by remember { mutableStateOf<StrokePath?>(null) }
     var hoverPosCanvas by remember { mutableStateOf<Offset?>(null) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var lastScreenPos by remember { mutableStateOf<Offset?>(null) }
+
+    // Keep latest values without restarting pointerInput when they change
+    val strokesState by rememberUpdatedState(strokes)
+    val beginStroke by rememberUpdatedState(onBeginStroke)
+    val commitStroke by rememberUpdatedState(onCommitStroke)
+    val cancelStroke by rememberUpdatedState(onCancelStroke)
 
     fun toolColor() = if (tool == Tool.ERASER) canvasColor else pencilColor
     fun toolWidth() = if (tool == Tool.ERASER) eraserWidthPx else pencilWidthPx
@@ -72,7 +80,7 @@ fun DrawingSurface(
         val vh = viewport.height.toFloat()
         val sw = canvasWidthPx * z
         val sh = canvasHeightPx * z
-        return Offset((vw - sw) / 2f, (vh - sh) / 2f)
+        return Offset((vw - sw) / 2f + pan.x, (vh - sh) / 2f + pan.y)
     }
     fun screenToCanvas(p: Offset, z: Float = zoom): Offset {
         val tl = topLeftInScreen(z)
@@ -86,7 +94,7 @@ fun DrawingSurface(
         cp.x >= 0f && cp.y >= 0f && cp.x <= canvasWidthPx && cp.y <= canvasHeightPx
 
     // Keep cursor stable under mouse while zoom changes
-    LaunchedEffect(zoom, viewport, canvasWidthPx, canvasHeightPx) {
+    LaunchedEffect(zoom, viewport, canvasWidthPx, canvasHeightPx, pan) {
         lastScreenPos?.let { sp ->
             val cp = screenToCanvas(sp, zoom)
             val inside = isInsideCanvas(cp)
@@ -98,7 +106,10 @@ fun DrawingSurface(
     Box(
         modifier
             .background(outsideColor)
-            .onSizeChanged { viewport = it }
+            .onSizeChanged {
+                viewport = it
+                onViewportChange(it)
+            }
             // Cursor icon depends on whether pointer is within canvas bounds
             .pointerHoverIcon(pointerIcon, overrideDescendants = true)
 
@@ -118,15 +129,14 @@ fun DrawingSurface(
             }
 
             // TAP-TO-DOT
-            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx) {
-                detectTapGestures(
+            .pointerInput("tap", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, pan, canvasWidthPx, canvasHeightPx) {                detectTapGestures(
                     onTap = { p ->
                         lastScreenPos = p
                         val cp = screenToCanvas(p)
                         if (!isInsideCanvas(cp)) return@detectTapGestures
-                        onBeginStroke(strokes)
+                        beginStroke(strokesState)
                         val dot = StrokePath(points = listOf(cp), color = toolColor(), widthPx = toolWidth())
-                        onCommitStroke(strokes + dot)
+                        commitStroke(strokesState + dot)
                         hoverPosCanvas = cp
                         pointerIcon = invisiblePointerIcon
                         current = null
@@ -135,7 +145,7 @@ fun DrawingSurface(
             }
 
             // DRAG STROKES (start must be inside; points are not clamped; we clip when rendering)
-            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, strokes, viewport, zoom, canvasWidthPx, canvasHeightPx) {
+            .pointerInput("drag", tool, pencilWidthPx, eraserWidthPx, viewport, zoom, canvasWidthPx, canvasHeightPx) {
                 var startedInside = false
                 detectDragGestures(
                     onDragStart = { start ->
@@ -143,7 +153,7 @@ fun DrawingSurface(
                         val cp = screenToCanvas(start)
                         startedInside = isInsideCanvas(cp)
                         if (startedInside) {
-                            onBeginStroke(strokes)
+                            beginStroke(strokesState)
                             current = StrokePath(points = listOf(cp), color = toolColor(), widthPx = toolWidth())
                             hoverPosCanvas = cp
                             pointerIcon = invisiblePointerIcon
@@ -160,8 +170,8 @@ fun DrawingSurface(
                     },
                     onDragEnd = {
                         if (startedInside) {
-                            current?.let { stroke -> onCommitStroke(strokes + stroke) } ?: onCancelStroke()
-                        } else onCancelStroke()
+                            current?.let { stroke -> commitStroke(strokesState + stroke) } ?: cancelStroke()
+                        } else cancelStroke()
                         current = null
                         startedInside = false
                         // cursor icon will be updated by the next Move event
@@ -169,7 +179,7 @@ fun DrawingSurface(
                     onDragCancel = {
                         current = null
                         startedInside = false
-                        onCancelStroke()
+                        cancelStroke()
                         pointerIcon = PointerIcon.Default
                     }
                 )

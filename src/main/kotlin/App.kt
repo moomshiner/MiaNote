@@ -14,6 +14,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.geometry.Offset
 
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
@@ -81,8 +82,13 @@ fun main() = application {
         var canvasWidthPx by remember { mutableStateOf(1920f) }
         var canvasHeightPx by remember { mutableStateOf(1080f) }
 
-        // Zoom state (+ wheel listener on the window)
+        // Viewport size (updated by DrawingSurface)
+        var viewportWidthPx by remember { mutableStateOf(0f) }
+        var viewportHeightPx by remember { mutableStateOf(0f) }
+
+        // Zoom state + pan (wheel listener keeps cursor stable)
         var zoom by remember { mutableStateOf(1f) }
+        var pan by remember { mutableStateOf(Offset.Zero) }
         val minZoom = 0.2f
         val maxZoom = 8f
         DisposableEffect(Unit) {
@@ -93,11 +99,32 @@ fun main() = application {
             canvasHeightPx = b.height.toFloat()
 
             val wheel = MouseWheelListener { e ->
+                if (viewportWidthPx == 0f || viewportHeightPx == 0f) return@MouseWheelListener
+                val cursor = Offset(e.x.toFloat(), e.y.toFloat())
                 val step = 1.1f
-                zoom = if (e.preciseWheelRotation < 0) {
+                val newZoom = if (e.preciseWheelRotation < 0) {
                     min(zoom * step, maxZoom)
                 } else {
                     max(zoom / step, minZoom)
+                }
+                if (newZoom != zoom) {
+                    // Current centered position of the canvas in screen coordinates
+                    val centerX = (viewportWidthPx - canvasWidthPx * zoom) / 2f
+                    val centerY = (viewportHeightPx - canvasHeightPx * zoom) / 2f
+                    val topLeftX = centerX + pan.x
+                    val topLeftY = centerY + pan.y
+                    // Convert cursor from screen space to canvas space
+                    val canvasX = (cursor.x - topLeftX) / zoom
+                    val canvasY = (cursor.y - topLeftY) / zoom
+
+                    // Recompute center and top-left after zoom change
+                    val centerNewX = (viewportWidthPx - canvasWidthPx * newZoom) / 2f
+                    val centerNewY = (viewportHeightPx - canvasHeightPx * newZoom) / 2f
+                    val topLeftNewX = cursor.x - canvasX * newZoom
+                    val topLeftNewY = cursor.y - canvasY * newZoom
+
+                    pan = Offset(topLeftNewX - centerNewX, topLeftNewY - centerNewY)
+                    zoom = newZoom
                 }
             }
             frame.addMouseWheelListener(wheel)
@@ -115,13 +142,38 @@ fun main() = application {
                 .focusRequester(focusRequester)
                 .focusTarget()
                 .onPreviewKeyEvent { ev ->
-                    if (!isDrawing &&
-                        ev.type == KeyEventType.KeyDown &&
-                        ev.isCtrlPressed &&
-                        ev.key == Key.Z
-                    ) {
-                        undo.pop()?.let { prev -> strokes = prev }
-                        true
+                    if (ev.type == KeyEventType.KeyDown) {
+                        when {
+                            !isDrawing && ev.isCtrlPressed && ev.key == Key.Z -> {
+                                undo.pop()?.let { prev -> strokes = prev }
+                                true
+                            }
+                            ev.key == Key.LeftBracket -> {
+                                if (tool == Tool.PENCIL) {
+                                    pencilWidthPx = max(pencilWidthPx - 1f, 1f)
+                                } else {
+                                    eraserWidthPx = max(eraserWidthPx - 1f, 1f)
+                                }
+                                true
+                            }
+                            ev.key == Key.RightBracket -> {
+                                if (tool == Tool.PENCIL) {
+                                    pencilWidthPx = min(pencilWidthPx + 1f, 10f)
+                                } else {
+                                    eraserWidthPx = min(eraserWidthPx + 1f, 10f)
+                                }
+                                true
+                            }
+                            !isDrawing && ev.key == Key.E -> {
+                                tool = Tool.ERASER
+                                true
+                            }
+                            !isDrawing && ev.key == Key.B -> {
+                                tool = Tool.PENCIL
+                                true
+                            }
+                            else -> false
+                        }
                     } else false
                 }
         ) {
@@ -135,6 +187,7 @@ fun main() = application {
                 canvasWidthPx = canvasWidthPx,
                 canvasHeightPx = canvasHeightPx,
                 zoom = zoom,
+                pan = pan,
                 tool = tool,
                 pencilColor = pencilColor,
                 pencilWidthPx = pencilWidthPx,
@@ -148,7 +201,11 @@ fun main() = application {
                     strokes = updated
                     isDrawing = false
                 },
-                onCancelStroke = { isDrawing = false }
+                onCancelStroke = { isDrawing = false },
+                onViewportChange = {
+                    viewportWidthPx = it.width.toFloat()
+                    viewportHeightPx = it.height.toFloat()
+                }
             )
 
             // Exit (top-left)
