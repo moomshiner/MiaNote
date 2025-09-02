@@ -69,8 +69,8 @@ fun main() = application {
         val canvasColor = Color.White
         val outsideColor = Color(0xFFEEEEEE) // light gray outside canvas
         val pencilColor = Color.Black
-        val pencilWidthPx = with(LocalDensity.current) { 4.dp.toPx() }
-        val eraserWidthPx = with(LocalDensity.current) { 20.dp.toPx() }
+        var pencilWidthPx by remember { mutableStateOf(4f) }
+        var eraserWidthPx by remember { mutableStateOf(10f) }
 
         // Strokes + undo
         var strokes by remember { mutableStateOf(listOf<StrokePath>()) }
@@ -157,6 +157,32 @@ fun main() = application {
                     .align(Alignment.TopStart)
                     .padding(4.dp)
             ) { exitApplication() }
+
+            // Brush size controls (top-right)
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                SpriteButton(resName = "plus.png") {
+                    if (tool == Tool.PENCIL) {
+                        pencilWidthPx = min(pencilWidthPx + 1f, 10f)
+                    } else {
+                        eraserWidthPx = min(eraserWidthPx + 1f, 10f)
+                    }
+                    focusRequester.requestFocus()
+                }
+                SpriteButton(resName = "minus.png") {
+                    if (tool == Tool.PENCIL) {
+                        pencilWidthPx = max(pencilWidthPx - 1f, 1f)
+                    } else {
+                        eraserWidthPx = max(eraserWidthPx - 1f, 1f)
+                    }
+                    focusRequester.requestFocus()
+                }
+            }
 
             // Tools (right side)
             Column(
